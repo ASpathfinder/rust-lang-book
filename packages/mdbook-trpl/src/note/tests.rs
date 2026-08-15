@@ -21,6 +21,26 @@ fn with_note() {
 }
 
 #[test]
+fn with_localized_note_marker() {
+    let text = "> 注意：这是一些文字。\n> 内容还在继续。";
+    let processed = rewrite_with_marker(text, "注意：");
+    assert_eq!(
+        render_markdown(&processed),
+        "<section class=\"note\" aria-role=\"note\">\n<p>注意：这是一些文字。\n内容还在继续。</p>\n</section>"
+    );
+}
+
+#[test]
+fn localized_marker_leaves_regular_blockquote_unchanged() {
+    let text = "> 这是普通引用。";
+    let processed = rewrite_with_marker(text, "注意：");
+    assert_eq!(
+        render_markdown(&processed),
+        "<blockquote>\n<p>这是普通引用。</p>\n</blockquote>\n"
+    );
+}
+
+#[test]
 fn regular_blockquote() {
     let text = "> This is some text.\n> It keeps going.";
     let processed = rewrite(text);

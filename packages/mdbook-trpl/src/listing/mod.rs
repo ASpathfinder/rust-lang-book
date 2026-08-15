@@ -8,7 +8,7 @@ use mdbook_preprocessor::{
 use pulldown_cmark::{html, Event};
 use pulldown_cmark_to_cmark::cmark;
 
-use crate::{config::Mode, CompositeError};
+use crate::{config, config::Mode, CompositeError};
 
 /// A preprocessor for rendering listings more elegantly.
 ///
@@ -60,12 +60,16 @@ impl Preprocessor for TrplListing {
     }
 
     fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
-        let mode = Mode::from_context(ctx, self.name())?;
+        let config = ListingConfig::from_context(ctx, self.name())?;
 
         let mut errors = vec![];
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ref mut chapter) = item {
-                match rewrite_listing(&chapter.content, mode) {
+                match rewrite_listing_with_labels(
+                    &chapter.content,
+                    config.output_mode,
+                    &config.labels,
+                ) {
                     Ok(rewritten) => chapter.content = rewritten,
                     Err(reason) => errors.push(anyhow!(reason)),
                 }
@@ -84,7 +88,60 @@ impl Preprocessor for TrplListing {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct ListingConfig {
+    output_mode: Mode,
+    #[serde(flatten)]
+    labels: ListingLabels,
+}
+
+impl ListingConfig {
+    fn from_context(
+        ctx: &PreprocessorContext,
+        preprocessor_name: &str,
+    ) -> Result<Self> {
+        Ok(config::from_context(ctx, preprocessor_name)?)
+    }
+}
+
+impl Default for ListingConfig {
+    fn default() -> Self {
+        Self {
+            output_mode: Mode::Default,
+            labels: ListingLabels::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct ListingLabels {
+    listing_label: String,
+    file_name_label: String,
+    label_separator: String,
+}
+
+impl Default for ListingLabels {
+    fn default() -> Self {
+        Self {
+            listing_label: "Listing".into(),
+            file_name_label: "Filename".into(),
+            label_separator: ": ".into(),
+        }
+    }
+}
+
+#[cfg(test)]
 fn rewrite_listing(src: &str, mode: Mode) -> Result<String, String> {
+    rewrite_listing_with_labels(src, mode, &ListingLabels::default())
+}
+
+fn rewrite_listing_with_labels(
+    src: &str,
+    mode: Mode,
+    labels: &ListingLabels,
+) -> Result<String, String> {
     match mode {
         Mode::Default => {
             let final_state = crate::parser(src).try_fold(
@@ -96,7 +153,7 @@ fn rewrite_listing(src: &str, mode: Mode) -> Result<String, String> {
                     match ev {
                         Event::Html(tag) => {
                             if tag.starts_with("<Listing") {
-                                state.open_listing(tag, mode)?;
+                                state.open_listing(tag, mode, labels)?;
                             } else if tag.starts_with("</Listing>") {
                                 state.close_listing(tag);
                             } else {
@@ -137,8 +194,8 @@ fn rewrite_listing(src: &str, mode: Mode) -> Result<String, String> {
             let mut current_closing = None;
             for line in src.lines() {
                 if line.starts_with("<Listing") && (line.ends_with(">")) {
-                    let listing =
-                        ListingBuilder::from_tag(&line)?.build(Mode::Simple);
+                    let listing = ListingBuilder::from_tag(&line)?
+                        .build(Mode::Simple, labels);
                     rewritten.push_str(&listing.opening_text());
                     current_closing = Some(listing.closing_text("\n"));
                 } else if line == "</Listing>" {
@@ -178,8 +235,9 @@ impl<'e> RewriteState<'e> {
         &mut self,
         tag: pulldown_cmark::CowStr<'_>,
         mode: Mode,
+        labels: &ListingLabels,
     ) -> Result<(), String> {
-        let listing = ListingBuilder::from_tag(&tag)?.build(mode);
+        let listing = ListingBuilder::from_tag(&tag)?.build(mode, labels);
         let opening_event = Event::Html(listing.opening_html().into());
 
         self.current = Some(listing);
@@ -216,6 +274,8 @@ struct Listing {
     number: Option<String>,
     caption: Option<String>,
     file_name: Option<String>,
+    labels: ListingLabels,
+    mode: Mode,
 }
 
 impl Listing {
@@ -230,7 +290,9 @@ impl Listing {
 
         match self.file_name.as_ref() {
             Some(file_name) => format!(
-                "{figure}<span class=\"file-name\">Filename: {file_name}</span>\n",
+                "{figure}<span class=\"file-name\">{}{separator}{file_name}</span>\n",
+                self.labels.file_name_label,
+                separator = self.labels.label_separator,
             ),
             None => figure,
         }
@@ -241,10 +303,13 @@ impl Listing {
             (Some(number), caption) => {
                 let caption_text = caption
                     .as_ref()
-                    .map(|caption| format!(": {}", caption))
+                    .map(|caption| {
+                        format!("{}{caption}", self.labels.label_separator)
+                    })
                     .unwrap_or_default();
                 let listing_a_tag = format!(
-                    "<a href=\"#listing-{number}\">Listing {number}</a>"
+                    "<a href=\"#listing-{number}\">{} {number}</a>",
+                    self.labels.listing_label,
                 );
                 format!(
                     r#"<figcaption>{listing_a_tag}{caption_text}</figcaption>
@@ -262,17 +327,33 @@ impl Listing {
     fn opening_text(&self) -> String {
         self.file_name
             .as_ref()
-            .map(|file_name| format!("{file_name}\n"))
+            .map(|file_name| {
+                if self.mode == Mode::Simple {
+                    format!("{file_name}\n")
+                } else {
+                    format!(
+                        "{}{separator}{file_name}\n",
+                        self.labels.file_name_label,
+                        separator = self.labels.label_separator,
+                    )
+                }
+            })
             .unwrap_or_default()
     }
 
     fn closing_text(&self, trailing: &str) -> String {
         match (&self.number, &self.caption) {
             (Some(number), Some(caption)) => {
-                format!("Listing {number}: {caption}{trailing}")
+                format!(
+                    "{} {number}{separator}{caption}{trailing}",
+                    self.labels.listing_label,
+                    separator = self.labels.label_separator,
+                )
             }
             (None, Some(caption)) => format!("{caption}{trailing}"),
-            (Some(number), None) => format!("Listing {number}{trailing}"),
+            (Some(number), None) => {
+                format!("{} {number}{trailing}", self.labels.listing_label,)
+            }
             (None, None) => trailing.into(),
         }
     }
@@ -345,7 +426,7 @@ impl ListingBuilder {
         self
     }
 
-    fn build(self, mode: Mode) -> Listing {
+    fn build(self, mode: Mode, labels: &ListingLabels) -> Listing {
         let caption = match mode {
             Mode::Default => self.caption.map(|caption_source| {
                 let events = crate::parser(&caption_source);
@@ -364,6 +445,8 @@ impl ListingBuilder {
             number: self.number.map(String::from),
             caption,
             file_name: self.file_name.map(String::from),
+            labels: labels.clone(),
+            mode,
         }
     }
 }

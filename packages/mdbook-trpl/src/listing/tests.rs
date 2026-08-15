@@ -64,6 +64,38 @@ Trailing text."#
 }
 
 #[test]
+fn localized_labels_work() {
+    let result = rewrite_listing_with_labels(
+        r#"<Listing number="1-1" caption="打印 `Hello, world!` 的程序" file-name="main.rs">
+
+```rust
+fn main() {}
+```
+
+</Listing>"#,
+        Mode::Default,
+        &ListingLabels {
+            listing_label: "示例".into(),
+            file_name_label: "文件名".into(),
+            label_separator: "：".into(),
+        },
+    );
+
+    assert_eq!(
+        &result.unwrap(),
+        r##"<figure class="listing" id="listing-1-1">
+<span class="file-name">文件名：main.rs</span>
+
+````rust
+fn main() {}
+````
+
+<figcaption><a href="#listing-1-1">示例 1-1</a>：打印 <code>Hello, world!</code> 的程序</figcaption>
+</figure>"##
+    );
+}
+
+#[test]
 fn listing_with_embedded_angle_brackets() {
     let result = rewrite_listing(
         r#"<Listing number="34-5" caption="This has a `Box<T>` in it.">

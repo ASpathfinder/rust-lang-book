@@ -9,6 +9,8 @@ use pulldown_cmark::{
 };
 use pulldown_cmark_to_cmark::cmark;
 
+use crate::config;
+
 /// A simple preprocessor for semantic notes in _The Rust Programming Language_.
 ///
 /// Takes in Markdown like this:
@@ -33,10 +35,12 @@ impl Preprocessor for TrplNote {
         "trpl-note"
     }
 
-    fn run(&self, _ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
+    fn run(&self, ctx: &PreprocessorContext, mut book: Book) -> Result<Book> {
+        let config: NoteConfig = config::from_context(ctx, self.name())?;
         book.for_each_mut(|item| {
             if let BookItem::Chapter(ref mut chapter) = item {
-                chapter.content = rewrite(&chapter.content);
+                chapter.content =
+                    rewrite_with_marker(&chapter.content, &config.note_marker);
             }
         });
         Ok(book)
@@ -47,7 +51,26 @@ impl Preprocessor for TrplNote {
     }
 }
 
-pub fn rewrite(text: &str) -> String {
+#[derive(Debug, serde::Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+struct NoteConfig {
+    note_marker: String,
+}
+
+impl std::default::Default for NoteConfig {
+    fn default() -> Self {
+        Self {
+            note_marker: "Note: ".into(),
+        }
+    }
+}
+
+#[cfg(test)]
+fn rewrite(text: &str) -> String {
+    rewrite_with_marker(text, "Note: ")
+}
+
+fn rewrite_with_marker(text: &str, note_marker: &str) -> String {
     let parser = crate::parser(text);
 
     let mut events = Vec::new();
@@ -60,7 +83,7 @@ pub fn rewrite(text: &str) -> String {
             }
 
             (StartingBlockquote(blockquote_events), Text(content)) => {
-                if content.starts_with("Note: ") {
+                if content.starts_with(note_marker) {
                     // This needs the "extra" `SoftBreak`s so that when the final rendering pass
                     // happens, it does not end up treating the internal content as inline *or*
                     // treating the HTML tags as inline tags:

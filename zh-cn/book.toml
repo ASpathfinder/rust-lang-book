@@ -1,0 +1,30 @@
+[book]
+title = "Rust 程序设计语言（简体中文版·试译）"
+authors = ["Steve Klabnik", "Carol Nichols", "Chris Krycho", "Rust 社区贡献者"]
+language = "zh-CN"
+
+[output.html]
+additional-css = ["ferris.css", "theme/2018-edition.css", "theme/semantic-notes.css", "theme/listing.css"]
+additional-js = ["ferris.js"]
+git-repository-url = "https://github.com/ASpathfinder/rust-lang-book"
+
+[output.html.search]
+use-boolean-and = true
+
+[preprocessor.trpl-note]
+command = "cargo run --manifest-path ../packages/mdbook-trpl/Cargo.toml --bin mdbook-trpl-note"
+note-marker = "注意："
+
+[preprocessor.trpl-listing]
+command = "cargo run --manifest-path ../packages/mdbook-trpl/Cargo.toml --bin mdbook-trpl-listing"
+output-mode = "default"
+listing-label = "示例"
+file-name-label = "文件名"
+label-separator = "："
+
+[rust]
+edition = "2024"
+
+[build]
+build-dir = "../book-zh-cn"
+extra-watch-dirs = ["../packages/mdbook-trpl"]
